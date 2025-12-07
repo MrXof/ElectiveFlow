@@ -88,6 +88,23 @@ class FirebaseDatabaseService: DatabaseService {
             throw NSError(domain: "ElectiveFlow", code: 409, userInfo: [NSLocalizedDescriptionKey: "You are already registered for this elective"])
         }
         
+        // Fetch elective to check for groups
+        let elective = try await fetchElective(id: electiveId)
+        
+        // Determine group assignment if elective has groups
+        var assignedGroupNumber: Int? = nil
+        var registrationStatus: StudentRegistration.RegistrationStatus = .pending
+        
+        if let numberOfGroups = elective.numberOfGroups, numberOfGroups > 0 {
+            // Auto-assign to the group with fewest students
+            let groupCounts = calculateGroupCounts(from: existingRegistrations, numberOfGroups: numberOfGroups)
+            if let minGroup = groupCounts.min(by: { $0.value < $1.value })?.key {
+                assignedGroupNumber = minGroup
+                registrationStatus = .confirmed
+                print("✅ Auto-assigned to group \(minGroup)")
+            }
+        }
+        
         let registration = StudentRegistration(
             id: UUID().uuidString,
             studentId: student.id,
@@ -95,8 +112,8 @@ class FirebaseDatabaseService: DatabaseService {
             electiveId: electiveId,
             registrationDate: Date(),
             priority: priority,
-            groupNumber: nil,
-            status: .pending
+            groupNumber: assignedGroupNumber,
+            status: registrationStatus
         )
         
         // Save registration
@@ -115,6 +132,25 @@ class FirebaseDatabaseService: DatabaseService {
         print("🎉 Student registration complete!")
     }
     
+    // Helper function to calculate current students per group
+    private func calculateGroupCounts(from registrations: [StudentRegistration], numberOfGroups: Int) -> [Int: Int] {
+        var counts: [Int: Int] = [:]
+        
+        // Initialize all groups with 0
+        for groupNum in 1...numberOfGroups {
+            counts[groupNum] = 0
+        }
+        
+        // Count students in each group
+        for registration in registrations {
+            if let groupNum = registration.groupNumber {
+                counts[groupNum, default: 0] += 1
+            }
+        }
+        
+        return counts
+    }
+    
     func fetchRegistrations(for electiveId: String) async throws -> [StudentRegistration] {
         let snapshot = try await db.collection(registrationsCollection)
             .whereField("electiveId", isEqualTo: electiveId)
@@ -131,6 +167,51 @@ class FirebaseDatabaseService: DatabaseService {
     
     func updateRegistration(_ registration: StudentRegistration) async throws {
         try db.collection(registrationsCollection).document(registration.id).setData(from: registration)
+    }
+    
+    // Auto-distribute students without groups
+    func autoDistributeUnassignedStudents(electiveId: String) async throws {
+        print("🔄 Auto-distributing unassigned students...")
+        
+        // Fetch elective
+        let elective = try await fetchElective(id: electiveId)
+        
+        guard let numberOfGroups = elective.numberOfGroups, numberOfGroups > 0 else {
+            print("⚠️ Elective has no groups configured")
+            return
+        }
+        
+        // Fetch all registrations
+        let registrations = try await fetchRegistrations(for: electiveId)
+        
+        // Find unassigned students
+        let unassigned = registrations.filter { $0.groupNumber == nil }
+        
+        guard !unassigned.isEmpty else {
+            print("✅ No unassigned students found")
+            return
+        }
+        
+        print("📋 Found \(unassigned.count) unassigned students")
+        
+        // Calculate current group counts
+        var groupCounts = calculateGroupCounts(from: registrations.filter { $0.groupNumber != nil }, numberOfGroups: numberOfGroups)
+        
+        // Assign each unassigned student to the group with fewest students
+        for registration in unassigned {
+            if let minGroup = groupCounts.min(by: { $0.value < $1.value })?.key {
+                var updatedReg = registration
+                updatedReg.groupNumber = minGroup
+                updatedReg.status = .confirmed
+                
+                try await updateRegistration(updatedReg)
+                groupCounts[minGroup, default: 0] += 1
+                
+                print("   ✅ \(registration.studentName) → Group \(minGroup)")
+            }
+        }
+        
+        print("🎉 Auto-distribution complete!")
     }
     
     // MARK: - Analytics

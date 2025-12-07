@@ -8,6 +8,11 @@ struct ElectiveDetailView: View {
     @State private var showDeleteAlert = false
     @State private var isDeleting = false
     @State private var showAIAssistantSheet = false
+    @State private var selectedGroupNumber: Int?
+    @State private var showGroupStudents = false
+    @State private var showExportSheet = false
+    @State private var exportFileURL: URL?
+    @State private var showManageGroups = false
     @Environment(\.dismiss) var dismiss
     
     init(elective: Elective) {
@@ -79,29 +84,57 @@ struct ElectiveDetailView: View {
                     }
                     
                     if !viewModel.dailyRegistrations.isEmpty {
+                        let minDate = viewModel.dailyRegistrations.map { $0.date }.min() ?? Date()
+                        let maxDate = viewModel.dailyRegistrations.map { $0.date }.max() ?? Date()
+                        
                         Chart {
                             ForEach(viewModel.dailyRegistrations) { data in
+                                // Area under the line with gradient
+                                AreaMark(
+                                    x: .value("Date", data.date),
+                                    y: .value("Count", data.count)
+                                )
+                                .foregroundStyle(
+                                    LinearGradient(
+                                        colors: [.blue.opacity(0.3), .blue.opacity(0.05)],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                                
+                                // Main line
                                 LineMark(
                                     x: .value("Date", data.date),
                                     y: .value("Count", data.count)
                                 )
                                 .foregroundStyle(.blue)
+                                .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                                 .interpolationMethod(.catmullRom)
                                 
+                                // Points on the line
                                 PointMark(
                                     x: .value("Date", data.date),
                                     y: .value("Count", data.count)
                                 )
                                 .foregroundStyle(.blue)
+                                .symbolSize(80)
                             }
                         }
                         .frame(height: 200)
+                        .chartXScale(domain: minDate...maxDate)
                         .chartXAxis {
                             AxisMarks(values: .stride(by: .day)) { _ in
                                 AxisGridLine()
-                                AxisValueLabel(format: .dateTime.month().day())
+                                AxisValueLabel(format: .dateTime.month().day(), anchor: .top)
                             }
                         }
+                        .chartYAxis {
+                            AxisMarks(position: .leading) { value in
+                                AxisGridLine()
+                                AxisValueLabel()
+                            }
+                        }
+                        .chartYScale(domain: 0...(viewModel.dailyRegistrations.map { $0.count }.max() ?? 10))
                     } else {
                         VStack(spacing: 12) {
                             Image(systemName: "chart.xyaxis.line")
@@ -132,33 +165,50 @@ struct ElectiveDetailView: View {
                         
                         Spacer()
                         
+                        Button(action: { showManageGroups = true }) {
+                            Label("Manage", systemImage: "gearshape")
+                                .font(.subheadline)
+                                .foregroundColor(.blue)
+                        }
+                        
                         if let balance = viewModel.groupBalance {
                             Text("Balance: \(String(format: "%.1f", balance.balanceCoefficient))")
                                 .font(.caption)
                                 .foregroundColor(balance.balanceCoefficient < 5 ? .green : .orange)
+                                .padding(.leading, 8)
                         }
                     }
                     
                     if let balance = viewModel.groupBalance {
                         ForEach(balance.groups) { group in
-                            HStack {
-                                Text("Group \(group.number)")
-                                    .font(.subheadline.weight(.medium))
-                                
-                                Spacer()
-                                
-                                HStack(spacing: 4) {
-                                    Text("\(group.studentCount)")
-                                        .font(.title3.bold())
-                                        .foregroundColor(.blue)
-                                    Text("students")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                            Button(action: {
+                                selectedGroupNumber = group.number
+                                showGroupStudents = true
+                            }) {
+                                HStack {
+                                    Text("Group \(group.number)")
+                                        .font(.subheadline.weight(.medium))
+                                    
+                                    Spacer()
+                                    
+                                    HStack(spacing: 4) {
+                                        Text("\(group.studentCount)")
+                                            .font(.title3.bold())
+                                            .foregroundColor(.blue)
+                                        Text("students")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
+                                .padding()
+                                .background(Color(.systemGray5))
+                                .cornerRadius(12)
                             }
-                            .padding()
-                            .background(Color(.systemGray5))
-                            .cornerRadius(12)
+                            .buttonStyle(.plain)
                         }
                         
                         Button(action: { showOptimizeSheet = true }) {
@@ -194,14 +244,30 @@ struct ElectiveDetailView: View {
                         }
                         
                         if !viewModel.registrations.isEmpty {
-                            Button(action: { showOptimizeSheet = true }) {
-                                Label("Distribute Students", systemImage: "wand.and.stars")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(Color.blue)
-                                    .cornerRadius(12)
+                            VStack(spacing: 8) {
+                                Button(action: { 
+                                    Task {
+                                        await autoDistributeStudents()
+                                    }
+                                }) {
+                                    Label("Auto-Distribute Students", systemImage: "arrow.triangle.branch")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .background(Color.green)
+                                        .cornerRadius(12)
+                                }
+                                
+                                Button(action: { showOptimizeSheet = true }) {
+                                    Label("Optimize Distribution", systemImage: "wand.and.stars")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .background(Color.blue)
+                                        .cornerRadius(12)
+                                }
                             }
                         } else {
                             VStack(spacing: 8) {
@@ -285,6 +351,14 @@ struct ElectiveDetailView: View {
         .navigationTitle("Elective Details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                if !viewModel.registrations.isEmpty {
+                    Button(action: exportAllStudents) {
+                        Label("Export All", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
+            
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(role: .destructive) {
                     showDeleteAlert = true
@@ -344,8 +418,73 @@ struct ElectiveDetailView: View {
                 dailyData: viewModel.dailyRegistrations
             )
         }
+        .sheet(isPresented: $showGroupStudents) {
+            if let groupNumber = selectedGroupNumber {
+                GroupStudentsView(
+                    elective: elective,
+                    groupNumber: groupNumber,
+                    students: viewModel.registrations.filter { $0.groupNumber == groupNumber }
+                )
+            }
+        }
+        .sheet(isPresented: $showExportSheet) {
+            if let url = exportFileURL {
+                ShareSheet(items: [url])
+            }
+        }
+        .sheet(isPresented: $showManageGroups) {
+            ManageGroupsView(
+                elective: elective,
+                registrations: viewModel.registrations,
+                onComplete: {
+                    Task {
+                        await viewModel.loadData()
+                    }
+                }
+            )
+        }
         .task {
             await viewModel.loadData()
+        }
+    }
+    
+    private func exportAllStudents() {
+        let fileName = "\(elective.name.replacingOccurrences(of: " ", with: "_"))_All_Students.csv"
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        
+        // Create CSV content with group information
+        var csvText = "Student Name,Registration Date,Priority,Group,Status\n"
+        
+        for student in viewModel.registrations.sorted(by: { 
+            if let g1 = $0.groupNumber, let g2 = $1.groupNumber {
+                if g1 != g2 { return g1 < g2 }
+            }
+            return $0.studentName < $1.studentName
+        }) {
+            let name = student.studentName
+            let date = student.registrationDate.formatted(date: .abbreviated, time: .omitted)
+            let priority = student.priority.map { String($0) } ?? "N/A"
+            let group = student.groupNumber.map { "Group \($0)" } ?? "Unassigned"
+            let status = student.status.rawValue.capitalized
+            
+            csvText += "\"\(name)\",\"\(date)\",\"\(priority)\",\"\(group)\",\"\(status)\"\n"
+        }
+        
+        do {
+            try csvText.write(to: path, atomically: true, encoding: .utf8)
+            exportFileURL = path
+            showExportSheet = true
+        } catch {
+            print("❌ Error creating CSV: \(error)")
+        }
+    }
+    
+    private func autoDistributeStudents() async {
+        do {
+            try await FirebaseDatabaseService.shared.autoDistributeUnassignedStudents(electiveId: elective.id)
+            await viewModel.loadData() // Reload data to show updated groups
+        } catch {
+            print("❌ Error auto-distributing students: \(error)")
         }
     }
     
@@ -413,19 +552,55 @@ class ElectiveDetailViewModel: ObservableObject {
                 predictedFinalCount = GroupDistributionAlgorithm.predictFinalCount(dailyData: dailyRegistrations)
             }
             
-            // Спробувати завантажити баланс груп
-            do {
-                let analytics = try await databaseService.fetchAnalytics(for: elective.id)
-                groupBalance = analytics.groupBalance
-            } catch {
-                print("⚠️ No group balance data found")
-            }
+            // Calculate group balance from registrations
+            calculateGroupBalance()
             
         } catch {
             print("❌ Error loading analytics: \(error)")
             dailyRegistrations = []
             predictedFinalCount = nil
         }
+    }
+    
+    private func calculateGroupBalance() {
+        guard let numberOfGroups = elective.numberOfGroups, numberOfGroups > 0 else {
+            groupBalance = nil
+            return
+        }
+        
+        // Count students per group
+        var groupCounts: [Int: Int] = [:]
+        for groupNum in 1...numberOfGroups {
+            groupCounts[groupNum] = 0
+        }
+        
+        for registration in registrations {
+            if let groupNum = registration.groupNumber {
+                groupCounts[groupNum, default: 0] += 1
+            }
+        }
+        
+        // Create group info
+        let groups = groupCounts.map { groupNum, count in
+            RegistrationAnalytics.GroupBalance.Group(
+                id: "group_\(groupNum)",
+                number: groupNum,
+                studentCount: count
+            )
+        }.sorted { $0.number < $1.number }
+        
+        // Calculate balance coefficient
+        let counts = groups.map { $0.studentCount }
+        let maxCount = counts.max() ?? 0
+        let minCount = counts.min() ?? 0
+        let balanceCoeff = Double(maxCount - minCount)
+        
+        groupBalance = RegistrationAnalytics.GroupBalance(
+            groups: groups,
+            balanceCoefficient: balanceCoeff
+        )
+        
+        print("📊 Group balance calculated: \(balanceCoeff)")
     }
 }
 
@@ -941,3 +1116,479 @@ struct QuickStatCard: View {
         .cornerRadius(12)
     }
 }
+
+// MARK: - Group Students View
+struct GroupStudentsView: View {
+    @Environment(\.dismiss) var dismiss
+    let elective: Elective
+    let groupNumber: Int
+    let students: [StudentRegistration]
+    @State private var showShareSheet = false
+    @State private var csvFileURL: URL?
+    
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    ForEach(students) { student in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(student.studentName)
+                                .font(.headline)
+                            
+                            HStack {
+                                Text("Registered: \(student.registrationDate.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                if let priority = student.priority {
+                                    Spacer()
+                                    Text("Priority: \(priority)")
+                                        .font(.caption)
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                } header: {
+                    HStack {
+                        Text("\(students.count) Students")
+                        Spacer()
+                    }
+                }
+            }
+            .navigationTitle("Group \(groupNumber)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: exportToCSV) {
+                        Label("Export", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
+            .sheet(isPresented: $showShareSheet) {
+                if let url = csvFileURL {
+                    ShareSheet(items: [url])
+                }
+            }
+        }
+    }
+    
+    private func exportToCSV() {
+        let fileName = "Group_\(groupNumber)_\(elective.name.replacingOccurrences(of: " ", with: "_")).csv"
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        
+        // Create CSV content
+        var csvText = "Student Name,Registration Date,Priority,Status\n"
+        
+        for student in students.sorted(by: { $0.studentName < $1.studentName }) {
+            let name = student.studentName
+            let date = student.registrationDate.formatted(date: .abbreviated, time: .omitted)
+            let priority = student.priority.map { String($0) } ?? "N/A"
+            let status = student.status.rawValue.capitalized
+            
+            csvText += "\"\(name)\",\"\(date)\",\"\(priority)\",\"\(status)\"\n"
+        }
+        
+        do {
+            try csvText.write(to: path, atomically: true, encoding: .utf8)
+            csvFileURL = path
+            showShareSheet = true
+        } catch {
+            print("❌ Error creating CSV: \(error)")
+        }
+    }
+}
+
+// MARK: - Share Sheet
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - Manage Groups View
+struct ManageGroupsView: View {
+    @Environment(\.dismiss) var dismiss
+    let elective: Elective
+    let registrations: [StudentRegistration]
+    let onComplete: () -> Void
+    
+    @State private var numberOfGroups: Int
+    @State private var showAddGroupAlert = false
+    @State private var showDeleteGroupAlert = false
+    @State private var groupToDelete: Int?
+    @State private var isSaving = false
+    @State private var showStudentMover = false
+    @State private var studentToMove: StudentRegistration?
+    @State private var localRegistrations: [StudentRegistration]
+    
+    init(elective: Elective, registrations: [StudentRegistration], onComplete: @escaping () -> Void) {
+        self.elective = elective
+        self.registrations = registrations
+        self.onComplete = onComplete
+        _numberOfGroups = State(initialValue: elective.numberOfGroups ?? 2)
+        _localRegistrations = State(initialValue: registrations)
+    }
+    
+    var groupedStudents: [Int: [StudentRegistration]] {
+        var groups: [Int: [StudentRegistration]] = [:]
+        for groupNum in 1...numberOfGroups {
+            groups[groupNum] = localRegistrations.filter { $0.groupNumber == groupNum }
+        }
+        return groups
+    }
+    
+    var unassignedStudents: [StudentRegistration] {
+        localRegistrations.filter { $0.groupNumber == nil }
+    }
+    
+    var body: some View {
+        NavigationView {
+            List {
+                // Groups Section
+                Section {
+                    ForEach(Array(1...numberOfGroups), id: \.self) { groupNum in
+                        GroupManagementRow(
+                            groupNumber: groupNum,
+                            students: groupedStudents[groupNum] ?? [],
+                            onDelete: {
+                                groupToDelete = groupNum
+                                showDeleteGroupAlert = true
+                            },
+                            onMoveStudent: { student in
+                                studentToMove = student
+                                showStudentMover = true
+                            }
+                        )
+                    }
+                } header: {
+                    HStack {
+                        Text("Groups (\(numberOfGroups))")
+                        Spacer()
+                        Button(action: { showAddGroupAlert = true }) {
+                            Label("Add Group", systemImage: "plus.circle.fill")
+                                .font(.subheadline)
+                        }
+                    }
+                }
+                
+                // Unassigned Students
+                if !unassignedStudents.isEmpty {
+                    Section {
+                        ForEach(unassignedStudents) { student in
+                            Button(action: {
+                                studentToMove = student
+                                showStudentMover = true
+                            }) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(student.studentName)
+                                            .font(.subheadline)
+                                        Text("Not assigned")
+                                            .font(.caption)
+                                            .foregroundColor(.orange)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Image(systemName: "arrow.right.circle")
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Unassigned Students (\(unassignedStudents.count))")
+                    }
+                }
+            }
+            .navigationTitle("Manage Groups")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .disabled(isSaving)
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        Task {
+                            await saveChanges()
+                        }
+                    }
+                    .disabled(isSaving)
+                }
+            }
+            .alert("Add Group", isPresented: $showAddGroupAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Add") {
+                    addGroup()
+                }
+            } message: {
+                Text("Add a new group? This will create Group \(numberOfGroups + 1).")
+            }
+            .alert("Delete Group", isPresented: $showDeleteGroupAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete", role: .destructive) {
+                    if let group = groupToDelete {
+                        deleteGroup(group)
+                    }
+                }
+            } message: {
+                if let group = groupToDelete, let students = groupedStudents[group] {
+                    Text("Delete Group \(group)? \(students.count) student(s) will be unassigned.")
+                }
+            }
+            .sheet(isPresented: $showStudentMover) {
+                if let student = studentToMove,
+                   let currentStudent = localRegistrations.first(where: { $0.id == student.id }) {
+                    MoveStudentView(
+                        student: currentStudent,
+                        numberOfGroups: numberOfGroups,
+                        currentGroup: currentStudent.groupNumber,
+                        onMove: { newGroup in
+                            moveStudent(currentStudent, to: newGroup)
+                        }
+                    )
+                }
+            }
+            .overlay {
+                if isSaving {
+                    ZStack {
+                        Color.black.opacity(0.3)
+                            .ignoresSafeArea()
+                        
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                                .tint(.white)
+                            
+                            Text("Saving changes...")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                        }
+                        .padding(32)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(16)
+                    }
+                }
+            }
+        }
+    }
+    
+    private func addGroup() {
+        withAnimation {
+            numberOfGroups += 1
+        }
+        print("➕ Added new group. Total groups: \(numberOfGroups)")
+    }
+    
+    private func deleteGroup(_ groupNumber: Int) {
+        withAnimation {
+            // Update local state first
+            for i in 0..<localRegistrations.count {
+                if localRegistrations[i].groupNumber == groupNumber {
+                    localRegistrations[i].groupNumber = nil
+                    localRegistrations[i].status = .pending
+                } else if let currentGroup = localRegistrations[i].groupNumber, currentGroup > groupNumber {
+                    // Shift down group numbers
+                    localRegistrations[i].groupNumber = currentGroup - 1
+                }
+            }
+            
+            // Update number of groups
+            numberOfGroups -= 1
+        }
+        print("🗑️ Deleted group \(groupNumber). Total groups: \(numberOfGroups)")
+    }
+    
+    private func moveStudent(_ student: StudentRegistration, to newGroup: Int?) {
+        // Update local registrations
+        if let index = localRegistrations.firstIndex(where: { $0.id == student.id }) {
+            localRegistrations[index].groupNumber = newGroup
+            localRegistrations[index].status = newGroup != nil ? .confirmed : .pending
+            print("📝 Moved \(student.studentName) to \(newGroup.map { "Group \($0)" } ?? "Unassigned")")
+        }
+    }
+    
+    private func saveChanges() async {
+        isSaving = true
+        
+        do {
+            // Save all registration changes
+            for registration in localRegistrations {
+                // Only update if different from original
+                if let original = registrations.first(where: { $0.id == registration.id }),
+                   (original.groupNumber != registration.groupNumber || original.status != registration.status) {
+                    try await FirebaseDatabaseService.shared.updateRegistration(registration)
+                    print("✅ Updated: \(registration.studentName) → Group \(registration.groupNumber?.description ?? "Unassigned")")
+                }
+            }
+            
+            // Update elective with new number of groups
+            var updatedElective = elective
+            updatedElective.numberOfGroups = numberOfGroups
+            try await FirebaseDatabaseService.shared.updateElective(updatedElective)
+            
+            await MainActor.run {
+                isSaving = false
+                onComplete()
+                dismiss()
+            }
+        } catch {
+            print("❌ Error saving changes: \(error)")
+            await MainActor.run {
+                isSaving = false
+            }
+        }
+    }
+}
+
+// MARK: - Group Management Row
+struct GroupManagementRow: View {
+    let groupNumber: Int
+    let students: [StudentRegistration]
+    let onDelete: () -> Void
+    let onMoveStudent: (StudentRegistration) -> Void
+    
+    @State private var isExpanded = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: { withAnimation { isExpanded.toggle() } }) {
+                HStack {
+                    Image(systemName: "person.3.fill")
+                        .foregroundColor(.blue)
+                    
+                    Text("Group \(groupNumber)")
+                        .font(.headline)
+                    
+                    Text("(\(students.count))")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    Spacer()
+                    
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            
+            if isExpanded {
+                VStack(spacing: 8) {
+                    if students.isEmpty {
+                        Text("No students in this group")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 4)
+                    } else {
+                        ForEach(students) { student in
+                            Button(action: { onMoveStudent(student) }) {
+                                HStack {
+                                    Text(student.studentName)
+                                        .font(.subheadline)
+                                    
+                                    Spacer()
+                                    
+                                    Image(systemName: "arrow.left.arrow.right")
+                                        .font(.caption)
+                                        .foregroundColor(.blue)
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+                    
+                    Button(role: .destructive, action: onDelete) {
+                        Label("Delete Group", systemImage: "trash")
+                            .font(.subheadline)
+                            .foregroundColor(.red)
+                    }
+                    .padding(.top, 4)
+                }
+                .padding(.leading, 28)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Move Student View
+struct MoveStudentView: View {
+    @Environment(\.dismiss) var dismiss
+    let student: StudentRegistration
+    let numberOfGroups: Int
+    let currentGroup: Int?
+    let onMove: (Int?) -> Void
+    
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    Button(action: {
+                        onMove(nil)
+                        dismiss()
+                    }) {
+                        HStack {
+                            Text("Unassigned")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            if currentGroup == nil {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Remove from groups")
+                }
+                
+                Section {
+                    ForEach(Array(1...numberOfGroups), id: \.self) { groupNum in
+                        Button(action: {
+                            onMove(groupNum)
+                            dismiss()
+                        }) {
+                            HStack {
+                                Text("Group \(groupNum)")
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                if currentGroup == groupNum {
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Move to group")
+                }
+            }
+            .navigationTitle("Move \(student.studentName)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
