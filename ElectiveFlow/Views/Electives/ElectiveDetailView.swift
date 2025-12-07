@@ -86,9 +86,26 @@ struct ElectiveDetailView: View {
                     if !viewModel.dailyRegistrations.isEmpty {
                         let minDate = viewModel.dailyRegistrations.map { $0.date }.min() ?? Date()
                         let maxDate = viewModel.dailyRegistrations.map { $0.date }.max() ?? Date()
+                        let minStudentsThreshold = 10 // Minimum required students to start the elective
+                        
+                        // Create data array with starting point at 0
+                        let chartData: [RegistrationAnalytics.DailyRegistration] = {
+                            var data = viewModel.dailyRegistrations
+                            // Add a starting point with 0 students one day before first registration
+                            if let firstDate = data.first?.date {
+                                let startDate = Calendar.current.date(byAdding: .day, value: -1, to: firstDate) ?? firstDate
+                                let startPoint = RegistrationAnalytics.DailyRegistration(
+                                    id: "start_0",
+                                    date: startDate,
+                                    count: 0
+                                )
+                                data.insert(startPoint, at: 0)
+                            }
+                            return data
+                        }()
                         
                         Chart {
-                            ForEach(viewModel.dailyRegistrations) { data in
+                            ForEach(chartData) { data in
                                 // Area under the line with gradient
                                 AreaMark(
                                     x: .value("Date", data.date),
@@ -119,6 +136,20 @@ struct ElectiveDetailView: View {
                                 .foregroundStyle(.blue)
                                 .symbolSize(80)
                             }
+                            
+                            // Minimum threshold line (dashed red line)
+                            RuleMark(y: .value("Minimum", minStudentsThreshold))
+                                .foregroundStyle(.red)
+                                .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
+                                .annotation(position: .top, alignment: .trailing) {
+                                    Text("Min: \(minStudentsThreshold)")
+                                        .font(.caption2)
+                                        .foregroundColor(.red)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 2)
+                                        .background(Color.red.opacity(0.1))
+                                        .cornerRadius(4)
+                                }
                         }
                         .frame(height: 200)
                         .chartXScale(domain: minDate...maxDate)
@@ -134,7 +165,7 @@ struct ElectiveDetailView: View {
                                 AxisValueLabel()
                             }
                         }
-                        .chartYScale(domain: 0...(viewModel.dailyRegistrations.map { $0.count }.max() ?? 10))
+                        .chartYScale(domain: 0...elective.maxStudents)
                     } else {
                         VStack(spacing: 12) {
                             Image(systemName: "chart.xyaxis.line")
