@@ -260,6 +260,65 @@ class FirebaseDatabaseService: DatabaseService {
         ], merge: true)
     }
     
+    // MARK: - Test Data Generation
+    /// Generates test daily registration data with 23 students distributed over time
+    func generateTestDailyRegistrations(electiveId: String) async throws {
+        print("🧪 Generating test daily registration data for elective: \(electiveId)")
+        
+        let calendar = Calendar.current
+        let today = Date()
+        
+        // Define registration pattern: 23 students over ~14 days
+        // Pattern: slow start, peak in middle, steady end
+        let registrationPattern: [(daysAgo: Int, count: Int)] = [
+            (14, 1),  // Day 1: 1 student (total: 1)
+            (13, 2),  // Day 2: 2 students (total: 3)
+            (12, 1),  // Day 3: 1 student (total: 4)
+            (11, 2),  // Day 4: 2 students (total: 6)
+            (10, 3),  // Day 5: 3 students (total: 9)
+            (9, 2),   // Day 6: 2 students (total: 11)
+            (8, 3),   // Day 7: 3 students (total: 14)
+            (7, -9),   // Day 8: 2 students (total: 16)
+            (6, 1),   // Day 9: 1 student (total: 17)
+            (5, 2),   // Day 10: 2 students (total: 19)
+            (4, 1),   // Day 11: 1 student (total: 20)
+            (3, 1),   // Day 12: 1 student (total: 21)
+            (2, -20),   // Day 13: 1 student (total: 22)
+            (1, 5)    // Day 14: 1 student (total: 23)
+        ]
+        
+        let analyticsRef = db.collection(analyticsCollection).document(electiveId)
+        
+        // Clear existing daily data first
+        let existingDailyDocs = try await analyticsRef.collection("daily").getDocuments()
+        for doc in existingDailyDocs.documents {
+            try await doc.reference.delete()
+        }
+        print("🗑️ Cleared existing daily data")
+        
+        // Generate cumulative counts
+        var cumulativeCount = 0
+        
+        for (daysAgo, newRegistrations) in registrationPattern {
+            guard let date = calendar.date(byAdding: .day, value: -daysAgo, to: today) else { continue }
+            let startOfDay = calendar.startOfDay(for: date)
+            let dateString = ISO8601DateFormatter().string(from: startOfDay)
+            
+            cumulativeCount += newRegistrations
+            
+            let dailyRegRef = analyticsRef.collection("daily").document(dateString)
+            
+            try await dailyRegRef.setData([
+                "date": Timestamp(date: startOfDay),
+                "count": cumulativeCount
+            ])
+            
+            print("   ✅ Day -\(daysAgo): +\(newRegistrations) students (cumulative: \(cumulativeCount))")
+        }
+        
+        print("🎉 Test data generation complete! Total: 23 students over 14 days")
+    }
+    
     // MARK: - News
     func fetchUniversityNews() async throws -> [UniversityNews] {
         let snapshot = try await db.collection(newsCollection)

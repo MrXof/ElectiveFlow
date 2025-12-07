@@ -20,6 +20,10 @@ protocol DatabaseService {
     func fetchDailyRegistrations(for electiveId: String, days: Int) async throws -> [RegistrationAnalytics.DailyRegistration]
     func recordDailyRegistration(electiveId: String, date: Date) async throws
     
+    #if DEBUG
+    func generateTestDailyRegistrations(electiveId: String) async throws
+    #endif
+    
     // News
     func fetchUniversityNews() async throws -> [UniversityNews]
     

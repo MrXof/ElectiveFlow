@@ -88,75 +88,71 @@ struct ElectiveDetailView: View {
                         let maxDate = viewModel.dailyRegistrations.map { $0.date }.max() ?? Date()
                         let minStudentsThreshold = 10 // Minimum required students to start the elective
                         
-                        // Create data array with starting point at 0
-                        let chartData: [RegistrationAnalytics.DailyRegistration] = {
-                            var data = viewModel.dailyRegistrations
-                            // Add a starting point with 0 students one day before first registration
-                            if let firstDate = data.first?.date {
-                                let startDate = Calendar.current.date(byAdding: .day, value: -1, to: firstDate) ?? firstDate
-                                let startPoint = RegistrationAnalytics.DailyRegistration(
-                                    id: "start_0",
-                                    date: startDate,
-                                    count: 0
-                                )
-                                data.insert(startPoint, at: 0)
-                            }
-                            return data
-                        }()
+                        // Calculate date range in days
+                        let daysDifference = Calendar.current.dateComponents([.day], from: minDate, to: maxDate).day ?? 0
+                        
+                        // Split data into segments by threshold
+                        let segments = createColorSegments(
+                            data: viewModel.dailyRegistrations,
+                            threshold: minStudentsThreshold
+                        )
+                        
+                        // Determine appropriate axis marks based on date range
+                        let axisMarkConfig = determineAxisMarks(daysDifference: daysDifference, minDate: minDate, maxDate: maxDate)
                         
                         Chart {
-                            ForEach(chartData) { data in
-                                // Area under the line with gradient
-                                AreaMark(
-                                    x: .value("Date", data.date),
-                                    y: .value("Count", data.count)
-                                )
-                                .foregroundStyle(
-                                    LinearGradient(
-                                        colors: [.blue.opacity(0.3), .blue.opacity(0.05)],
-                                        startPoint: .top,
-                                        endPoint: .bottom
+                            // Draw each segment separately with series identifier
+                            ForEach(segments.indices, id: \.self) { segmentIndex in
+                                let segment = segments[segmentIndex]
+                                
+                                ForEach(segment.data) { point in
+                                    // Line marks with series identifier for separate coloring
+                                    LineMark(
+                                        x: .value("Date", point.date),
+                                        y: .value("Count", point.count),
+                                        series: .value("Segment", segmentIndex)
                                     )
-                                )
+                                    .foregroundStyle(segment.color)
+                                    .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                                    .interpolationMethod(.catmullRom)
+                                }
                                 
-                                // Main line
-                                LineMark(
-                                    x: .value("Date", data.date),
-                                    y: .value("Count", data.count)
-                                )
-                                .foregroundStyle(.blue)
-                                .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-                                .interpolationMethod(.catmullRom)
-                                
-                                // Points on the line
-                                PointMark(
-                                    x: .value("Date", data.date),
-                                    y: .value("Count", data.count)
-                                )
-                                .foregroundStyle(.blue)
-                                .symbolSize(80)
+                                // Points - draw separately to ensure correct colors
+                                ForEach(segment.data) { point in
+                                    PointMark(
+                                        x: .value("Date", point.date),
+                                        y: .value("Count", point.count)
+                                    )
+                                    .foregroundStyle(segment.color)
+                                    .symbolSize(80)
+                                }
                             }
                             
-                            // Minimum threshold line (dashed red line)
+                            // Minimum threshold line (dashed gray line)
                             RuleMark(y: .value("Minimum", minStudentsThreshold))
-                                .foregroundStyle(.red)
+                                .foregroundStyle(.gray.opacity(0.5))
                                 .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
                                 .annotation(position: .top, alignment: .trailing) {
                                     Text("Min: \(minStudentsThreshold)")
                                         .font(.caption2)
-                                        .foregroundColor(.red)
+                                        .foregroundColor(.secondary)
                                         .padding(.horizontal, 4)
                                         .padding(.vertical, 2)
-                                        .background(Color.red.opacity(0.1))
+                                        .background(Color(.systemGray6))
                                         .cornerRadius(4)
                                 }
                         }
                         .frame(height: 200)
                         .chartXScale(domain: minDate...maxDate)
                         .chartXAxis {
-                            AxisMarks(values: .stride(by: .day)) { _ in
+                            AxisMarks(values: axisMarkConfig.values) { value in
                                 AxisGridLine()
-                                AxisValueLabel(format: .dateTime.month().day(), anchor: .top)
+                                AxisValueLabel {
+                                    if let date = value.as(Date.self) {
+                                        Text(axisMarkConfig.formatter(date))
+                                            .font(.caption2)
+                                    }
+                                }
                             }
                         }
                         .chartYAxis {
@@ -532,6 +528,116 @@ struct ElectiveDetailView: View {
         
         isDeleting = false
     }
+    
+    // Helper function to split data into color segments
+    private func createColorSegments(
+        data: [RegistrationAnalytics.DailyRegistration],
+        threshold: Int
+    ) -> [ChartSegment] {
+        var segments: [ChartSegment] = []
+        var currentSegmentData: [RegistrationAnalytics.DailyRegistration] = []
+        var currentColor: Color?
+        
+        for (index, point) in data.enumerated() {
+            let pointColor: Color = point.count >= threshold ? .blue : .red
+            
+            // If this is the first point or color hasn't changed
+            if currentColor == nil || currentColor == pointColor {
+                currentSegmentData.append(point)
+                currentColor = pointColor
+            } else {
+                // Color changed - save current segment with overlap point
+                if !currentSegmentData.isEmpty, let color = currentColor {
+                    // Add current point to previous segment for smooth transition
+                    currentSegmentData.append(point)
+                    segments.append(ChartSegment(data: currentSegmentData, color: color))
+                }
+                
+                // Start new segment with current point
+                currentSegmentData = [point]
+                currentColor = pointColor
+            }
+        }
+        
+        // Add final segment
+        if !currentSegmentData.isEmpty, let color = currentColor {
+            segments.append(ChartSegment(data: currentSegmentData, color: color))
+        }
+        
+        return segments
+    }
+    
+    // Helper function to determine appropriate axis marks based on date range
+    private func determineAxisMarks(daysDifference: Int, minDate: Date, maxDate: Date) -> AxisMarkConfig {
+        let calendar = Calendar.current
+        
+        if daysDifference <= 9 {
+            // Show daily intervals (up to 9 days)
+            var dates: [Date] = []
+            for i in 0...min(daysDifference, 8) {
+                if let date = calendar.date(byAdding: .day, value: i, to: minDate) {
+                    dates.append(date)
+                }
+            }
+            
+            return AxisMarkConfig(
+                values: dates,
+                formatter: { date in
+                    let dayNum = calendar.dateComponents([.day], from: minDate, to: date).day ?? 0
+                    return "\(dayNum + 1)d"
+                }
+            )
+        } else if daysDifference <= 63 {
+            // Show weekly intervals (up to 9 weeks)
+            var dates: [Date] = []
+            let weeks = min(daysDifference / 7, 9)
+            
+            for i in 0...weeks {
+                if let date = calendar.date(byAdding: .weekOfYear, value: i, to: minDate) {
+                    dates.append(date)
+                }
+            }
+            
+            return AxisMarkConfig(
+                values: dates,
+                formatter: { date in
+                    let weekNum = calendar.dateComponents([.weekOfYear], from: minDate, to: date).weekOfYear ?? 0
+                    return "\(weekNum + 1)w"
+                }
+            )
+        } else {
+            // Show monthly intervals (3+ months)
+            var dates: [Date] = []
+            let months = min(daysDifference / 30, 9)
+            
+            for i in 0...months {
+                if let date = calendar.date(byAdding: .month, value: i, to: minDate) {
+                    dates.append(date)
+                }
+            }
+            
+            return AxisMarkConfig(
+                values: dates,
+                formatter: { date in
+                    let formatter = DateFormatter()
+                    formatter.dateFormat = "MMM"
+                    return formatter.string(from: date)
+                }
+            )
+        }
+    }
+}
+
+// Helper struct for axis mark configuration
+struct AxisMarkConfig {
+    let values: [Date]
+    let formatter: (Date) -> String
+}
+
+// Helper struct for chart segments
+struct ChartSegment {
+    let data: [RegistrationAnalytics.DailyRegistration]
+    let color: Color
 }
 
 // MARK: - View Model

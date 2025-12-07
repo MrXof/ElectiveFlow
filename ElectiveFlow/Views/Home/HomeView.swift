@@ -107,6 +107,33 @@ struct HomeView: View {
                     
                     Spacer()
                     
+                    #if DEBUG
+                    Button(action: {
+                        Task {
+                            await viewModel.generateTestDataForAllElectives()
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            if viewModel.isGeneratingTestData {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .tint(.white)
+                            } else {
+                                Image(systemName: "flame.fill")
+                                    .font(.caption)
+                            }
+                            Text(viewModel.isGeneratingTestData ? "Generating..." : "Test Data")
+                                .font(.caption)
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.orange)
+                        .cornerRadius(8)
+                    }
+                    .disabled(viewModel.isGeneratingTestData)
+                    #endif
+                    
                     NavigationLink(destination: ElectivesListView()) {
                         Text("See All")
                             .font(.subheadline)
@@ -198,6 +225,7 @@ class HomeViewModel: ObservableObject {
     @Published var recommendedElectives: [Elective] = []
     @Published var studentRegistrations: [StudentRegistration] = []
     @Published var totalStudents: Int = 0
+    @Published var isGeneratingTestData: Bool = false
     
     private var databaseService: DatabaseService {
         return FirebaseDatabaseService.shared
@@ -250,6 +278,35 @@ class HomeViewModel: ObservableObject {
             print("❌ Error loading teacher data: \(error)")
         }
     }
+    
+    #if DEBUG
+    func generateTestDataForAllElectives() async {
+        isGeneratingTestData = true
+        print("🧪 Generating test data for all teacher's electives...")
+        
+        guard !teacherElectives.isEmpty else {
+            print("⚠️ No electives to generate data for")
+            isGeneratingTestData = false
+            return
+        }
+        
+        for elective in teacherElectives {
+            print("📊 Generating test data for: \(elective.name)")
+            do {
+                try await databaseService.generateTestDailyRegistrations(electiveId: elective.id)
+                print("   ✅ Test data generated for \(elective.name)")
+            } catch {
+                print("   ❌ Error generating data for \(elective.name): \(error)")
+            }
+        }
+        
+        print("🎉 Test data generation complete for all electives!")
+        
+        // Reload data to reflect changes
+        await loadData()
+        isGeneratingTestData = false
+    }
+    #endif
     
     private func loadStudentData(studentId: String) async {
         do {
@@ -349,8 +406,28 @@ struct ElectiveCardCompact: View {
                 
                 Spacer()
                 
-                ProgressView(value: elective.fillPercentage)
-                    .frame(width: 60)
+                // Progress bar with minimum threshold indicator
+                ZStack(alignment: .leading) {
+                    // Background
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.gray.opacity(0.2))
+                        .frame(width: 100, height: 8)
+                    
+                    // Fill progress
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(elective.currentStudents >= 10 ? Color.blue : Color.red)
+                        .frame(width: min(CGFloat(elective.fillPercentage) * 100, 100), height: 8)
+                    
+                    // Minimum threshold line (at 10 students)
+                    let minThreshold = 10
+                    let thresholdPercentage = CGFloat(minThreshold) / CGFloat(elective.maxStudents)
+                    
+                    Rectangle()
+                        .fill(Color.orange)
+                        .frame(width: 2, height: 12)
+                        .offset(x: thresholdPercentage * 100 - 1)
+                }
+                .frame(width: 100, height: 12)
             }
         }
         .padding()
