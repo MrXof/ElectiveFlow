@@ -106,19 +106,26 @@ class ElectivesViewModel: ObservableObject {
     }
     
     func loadElectives() async {
+        print("📥 Loading electives...")
         do {
             electives = try await databaseService.fetchElectives()
+            print("✅ Loaded \(electives.count) electives")
+            for elective in electives {
+                print("   - \(elective.name) (ID: \(elective.id))")
+            }
         } catch {
-            print("Error loading electives: \(error)")
+            print("❌ Error loading electives: \(error)")
         }
     }
     
     func createElective(_ elective: Elective) async {
+        print("🔨 Creating elective: \(elective.name)")
         do {
             try await databaseService.createElective(elective)
+            print("✅ Elective created, reloading list...")
             await loadElectives()
         } catch {
-            print("Error creating elective: \(error)")
+            print("❌ Error creating elective: \(error)")
         }
     }
     

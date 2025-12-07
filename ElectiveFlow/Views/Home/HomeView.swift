@@ -58,7 +58,14 @@ struct HomeView: View {
                 await viewModel.loadData()
             }
             .task {
+                viewModel.setUser(appState.currentUser)
                 await viewModel.loadData()
+            }
+            .onChange(of: appState.currentUser) { newUser in
+                viewModel.setUser(newUser)
+                Task {
+                    await viewModel.loadData()
+                }
             }
             .sheet(isPresented: $showCreateElectiveSheet) {
                 CreateElectiveView(viewModel: electivesViewModel)
@@ -196,9 +203,22 @@ class HomeViewModel: ObservableObject {
         return FirebaseDatabaseService.shared
     }
     
+    private var currentUser: User?
+    
+    func setUser(_ user: User?) {
+        currentUser = user
+    }
+    
     func loadData() async {
         await loadNews()
-        await loadElectives()
+        
+        guard let user = currentUser else { return }
+        
+        if user.role == .teacher {
+            await loadTeacherData(teacherId: user.id)
+        } else {
+            await loadStudentData(studentId: user.id)
+        }
     }
     
     private func loadNews() async {
@@ -209,13 +229,65 @@ class HomeViewModel: ObservableObject {
         }
     }
     
-    private func loadElectives() async {
+    private func loadTeacherData(teacherId: String) async {
+        print("👨‍🏫 Loading teacher data for ID: \(teacherId)")
         do {
+            // Завантажити тільки елективи цього вчителя
             let allElectives = try await databaseService.fetchElectives()
-            teacherElectives = allElectives
+            print("📚 Total electives in database: \(allElectives.count)")
+            
+            for elective in allElectives {
+                print("   - \(elective.name) (Teacher ID: \(elective.teacherId))")
+            }
+            
+            teacherElectives = allElectives.filter { $0.teacherId == teacherId }
+            print("✅ Filtered to \(teacherElectives.count) electives for this teacher")
+            
+            // Порахувати реальну кількість студентів у елективах вчителя
             totalStudents = teacherElectives.reduce(0) { $0 + $1.currentStudents }
+            print("📊 Total students across all teacher electives: \(totalStudents)")
         } catch {
-            print("Error loading electives: \(error)")
+            print("❌ Error loading teacher data: \(error)")
+        }
+    }
+    
+    private func loadStudentData(studentId: String) async {
+        do {
+            // Завантажити реєстрації студента
+            studentRegistrations = try await databaseService.fetchStudentRegistrations(studentId: studentId)
+            print("✅ Loaded \(studentRegistrations.count) registrations for student \(studentId)")
+            
+            // Завантажити всі елективи для рекомендацій
+            let allElectives = try await databaseService.fetchElectives()
+            print("✅ Loaded \(allElectives.count) total electives")
+            
+            // Фільтрувати рекомендації на основі інтересів студента
+            if let interests = currentUser?.interests, !interests.isEmpty {
+                print("🔍 Student interests: \(interests)")
+                recommendedElectives = allElectives.filter { elective in
+                    // Перевірити, чи студент ще не зареєстрований на цей електив
+                    let notRegistered = !studentRegistrations.contains { $0.electiveId == elective.id }
+                    
+                    // Перевірити, чи категорії елективу відповідають інтересам студента
+                    let matchesInterests = !Set(elective.categories).isDisjoint(with: Set(interests))
+                    
+                    return notRegistered && matchesInterests && !elective.isFull
+                }
+            } else {
+                // Якщо немає інтересів, показати просто доступні елективи
+                print("⚠️ No interests set for student")
+                recommendedElectives = allElectives.filter { elective in
+                    let notRegistered = !studentRegistrations.contains { $0.electiveId == elective.id }
+                    return notRegistered && !elective.isFull
+                }
+            }
+            
+            // Обмежити до 5 рекомендацій
+            recommendedElectives = Array(recommendedElectives.prefix(5))
+            print("✅ Recommended \(recommendedElectives.count) electives")
+            
+        } catch {
+            print("❌ Error loading student data: \(error)")
         }
     }
 }
@@ -322,15 +394,26 @@ struct NewsCardCompact: View {
 
 struct RegistrationCard: View {
     let registration: StudentRegistration
+    @State private var elective: Elective?
     
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Registration")
-                    .font(.headline)
+                if let elective = elective {
+                    Text(elective.name)
+                        .font(.headline)
+                    
+                    Text(elective.period)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Loading...")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                }
                 
                 Text(registration.registrationDate, style: .date)
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundColor(.secondary)
             }
             
@@ -341,6 +424,17 @@ struct RegistrationCard: View {
         .padding()
         .background(Color(.systemGray6))
         .cornerRadius(16)
+        .task {
+            await loadElective()
+        }
+    }
+    
+    private func loadElective() async {
+        do {
+            elective = try await FirebaseDatabaseService.shared.fetchElective(id: registration.electiveId)
+        } catch {
+            print("Error loading elective: \(error)")
+        }
     }
 }
 

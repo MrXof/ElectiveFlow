@@ -1,7 +1,7 @@
 import Foundation
 
 // MARK: - User Model
-struct User: Identifiable, Codable {
+struct User: Identifiable, Codable, Equatable {
     let id: String
     var name: String
     var email: String
@@ -12,6 +12,15 @@ struct User: Identifiable, Codable {
     enum UserRole: String, Codable {
         case teacher = "teacher"
         case student = "student"
+    }
+    
+    static func == (lhs: User, rhs: User) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.name == rhs.name &&
+        lhs.email == rhs.email &&
+        lhs.role == rhs.role &&
+        lhs.interests == rhs.interests &&
+        lhs.photoURL == rhs.photoURL
     }
 }
 

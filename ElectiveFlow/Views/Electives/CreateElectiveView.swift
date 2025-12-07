@@ -3,6 +3,7 @@ import SwiftUI
 struct CreateElectiveView: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var viewModel: ElectivesViewModel
+    @EnvironmentObject var appState: AppState
     
     @State private var name = ""
     @State private var description = ""
@@ -47,22 +48,32 @@ struct CreateElectiveView: View {
                     Stepper("Number of Groups: \(numberOfGroups)", value: $numberOfGroups, in: 1...10)
                 }
                 
-                Section("Categories") {
-                    FlowLayout(spacing: 8) {
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
                         ForEach(availableCategories, id: \.self) { category in
                             CategoryChip(
                                 title: category,
-                                isSelected: selectedCategories.contains(category)
-                            ) {
-                                if selectedCategories.contains(category) {
-                                    selectedCategories.remove(category)
-                                } else {
-                                    selectedCategories.insert(category)
+                                isSelected: selectedCategories.contains(category),
+                                action: {
+                                    toggleCategory(category)
                                 }
-                            }
+                            )
                         }
                     }
                     .padding(.vertical, 8)
+                } header: {
+                    HStack {
+                        Text("Categories")
+                        if !selectedCategories.isEmpty {
+                            Text("(\(selectedCategories.count) selected)")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } footer: {
+                    if selectedCategories.isEmpty {
+                        Text("Select at least one category")
+                            .foregroundColor(.red)
+                    }
                 }
                 
                 Section("Distribution Model") {
@@ -123,9 +134,26 @@ struct CreateElectiveView: View {
         }
     }
     
+    private func toggleCategory(_ category: String) {
+        if selectedCategories.contains(category) {
+            selectedCategories.remove(category)
+            print("🔴 Removed category: \(category)")
+        } else {
+            selectedCategories.insert(category)
+            print("🟢 Added category: \(category)")
+        }
+        print("📋 Selected categories: \(selectedCategories.sorted())")
+    }
+    
     private func createElective() {
         guard isValid else {
             alertMessage = "Please fill in all required fields"
+            showAlert = true
+            return
+        }
+        
+        guard let currentUser = appState.currentUser else {
+            alertMessage = "User not found"
             showAlert = true
             return
         }
@@ -135,8 +163,8 @@ struct CreateElectiveView: View {
             name: name,
             description: description,
             period: selectedPeriod,
-            teacherId: "current-teacher-id", // Replace with actual teacher ID
-            teacherName: "Current Teacher", // Replace with actual teacher name
+            teacherId: currentUser.id,
+            teacherName: currentUser.name,
             maxStudents: maxStudents,
             currentStudents: 0,
             categories: Array(selectedCategories),
@@ -148,9 +176,23 @@ struct CreateElectiveView: View {
             numberOfGroups: numberOfGroups
         )
         
+        print("📝 Creating elective: \(elective.name)")
+        print("   ID: \(elective.id)")
+        print("   Teacher ID: \(elective.teacherId)")
+        print("   Teacher Name: \(elective.teacherName)")
+        print("   Period: \(elective.period)")
+        print("   Categories: \(elective.categories)")
+        
         Task {
-            await viewModel.createElective(elective)
-            dismiss()
+            do {
+                await viewModel.createElective(elective)
+                print("✅ Elective created successfully!")
+                dismiss()
+            } catch {
+                print("❌ Error creating elective: \(error)")
+                alertMessage = "Failed to create elective: \(error.localizedDescription)"
+                showAlert = true
+            }
         }
     }
 }
@@ -161,14 +203,36 @@ struct CategoryChip: View {
     let action: () -> Void
     
     var body: some View {
-        Button(action: action) {
+        HStack {
             Text(title)
                 .font(.subheadline)
-                .foregroundColor(isSelected ? .white : .primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(isSelected ? Color.blue : Color(.systemGray6))
-                .cornerRadius(16)
+                .fontWeight(.medium)
+            
+            Spacer()
+            
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.blue)
+                    .font(.title3)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .foregroundColor(isSelected ? .blue : .primary)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(isSelected ? Color.blue.opacity(0.1) : Color(.systemGray6))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                action()
+            }
         }
     }
 }

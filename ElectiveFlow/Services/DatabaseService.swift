@@ -6,6 +6,7 @@ protocol DatabaseService {
     func fetchElective(id: String) async throws -> Elective
     func createElective(_ elective: Elective) async throws
     func updateElective(_ elective: Elective) async throws
+    func updateElectiveTeacher(electiveId: String, teacherId: String, teacherName: String) async throws
     func deleteElective(id: String) async throws
     
     // Student Registrations
@@ -16,6 +17,7 @@ protocol DatabaseService {
     
     // Analytics
     func fetchAnalytics(for electiveId: String) async throws -> RegistrationAnalytics
+    func fetchDailyRegistrations(for electiveId: String, days: Int) async throws -> [RegistrationAnalytics.DailyRegistration]
     func recordDailyRegistration(electiveId: String, date: Date) async throws
     
     // News
@@ -23,6 +25,7 @@ protocol DatabaseService {
     
     // Users
     func fetchUser(id: String) async throws -> User
+    func fetchUserByEmail(_ email: String) async throws -> [User]
     func createUser(_ user: User) async throws
     func updateUser(_ user: User) async throws
 }

@@ -3,6 +3,7 @@ import SwiftUI
 struct StudentElectiveDetailView: View {
     let elective: Elective
     @StateObject private var viewModel: StudentElectiveDetailViewModel
+    @EnvironmentObject var appState: AppState
     @State private var showRegistrationSheet = false
     @State private var showSuccessAlert = false
     
@@ -187,7 +188,18 @@ struct StudentElectiveDetailView: View {
             Text("You have successfully registered for \(elective.name)")
         }
         .task {
-            await viewModel.checkRegistration()
+            if let currentUser = appState.currentUser {
+                viewModel.setCurrentUser(currentUser.id)
+                await viewModel.checkRegistration()
+            }
+        }
+        .onChange(of: appState.currentUser) { newUser in
+            if let user = newUser {
+                viewModel.setCurrentUser(user.id)
+                Task {
+                    await viewModel.checkRegistration()
+                }
+            }
         }
     }
 }
@@ -199,19 +211,39 @@ class StudentElectiveDetailViewModel: ObservableObject {
     
     private let elective: Elective
     private let databaseService: DatabaseService = FirebaseDatabaseService.shared
+    private var currentUserId: String?
     
     init(elective: Elective) {
         self.elective = elective
     }
     
+    func setCurrentUser(_ userId: String) {
+        self.currentUserId = userId
+    }
+    
     func checkRegistration() async {
-        // Check if current user is already registered
-        // Mock implementation
+        guard let userId = currentUserId else {
+            print("⚠️ No current user ID set")
+            return
+        }
+        
+        print("🔍 Checking registration for user \(userId) in elective \(elective.id)")
+        
         do {
+            // Fetch all registrations for this elective
             let registrations = try await databaseService.fetchRegistrations(for: elective.id)
-            currentRegistration = registrations.first // In real app, filter by current user
+            print("📋 Found \(registrations.count) total registrations")
+            
+            // Filter for current user
+            currentRegistration = registrations.first { $0.studentId == userId }
+            
+            if let registration = currentRegistration {
+                print("✅ User is registered: \(registration.status.rawValue)")
+            } else {
+                print("ℹ️ User is not registered for this elective")
+            }
         } catch {
-            print("Error checking registration: \(error)")
+            print("❌ Error checking registration: \(error)")
         }
     }
 }
@@ -300,12 +332,15 @@ struct RegistrationStatusCard: View {
 
 struct RegisterForElectiveView: View {
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var appState: AppState
     let elective: Elective
     let onSuccess: () -> Void
     
     @State private var priority: Int = 1
     @State private var notes: String = ""
     @State private var isRegistering = false
+    @State private var showError = false
+    @State private var errorMessage = ""
     
     var body: some View {
         NavigationView {
@@ -365,22 +400,54 @@ struct RegisterForElectiveView: View {
                     }
                 }
             }
+            .alert("Registration Error", isPresented: $showError) {
+                Button("OK") {}
+            } message: {
+                Text(errorMessage)
+            }
         }
     }
     
     private func registerForElective() {
+        guard let currentUser = appState.currentUser else {
+            errorMessage = "User not found. Please log in again."
+            showError = true
+            return
+        }
+        
         isRegistering = true
         
         Task {
-            // Simulate registration delay
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            
-            // In real app, call database service here
-            
-            await MainActor.run {
-                isRegistering = false
-                onSuccess()
-                dismiss()
+            do {
+                let databaseService = FirebaseDatabaseService.shared
+                
+                print("📝 Registering student: \(currentUser.name)")
+                print("   Student ID: \(currentUser.id)")
+                print("   Elective: \(elective.name)")
+                print("   Elective ID: \(elective.id)")
+                print("   Priority: \(priority)")
+                
+                // Register student using Firebase service
+                try await databaseService.registerStudent(
+                    electiveId: elective.id,
+                    student: currentUser,
+                    priority: elective.distributionModel == .priority ? priority : nil
+                )
+                
+                print("✅ Student registered successfully!")
+                
+                await MainActor.run {
+                    isRegistering = false
+                    onSuccess()
+                    dismiss()
+                }
+            } catch {
+                print("❌ Error registering student: \(error)")
+                await MainActor.run {
+                    isRegistering = false
+                    errorMessage = "Failed to register: \(error.localizedDescription)"
+                    showError = true
+                }
             }
         }
     }
